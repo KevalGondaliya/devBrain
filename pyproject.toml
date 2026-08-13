@@ -1,0 +1,50 @@
+[project]
+name = "devbrain-workspace"
+version = "0.1.0"
+description = "DevBrain — Claude-powered developer command center (MCP monorepo)"
+requires-python = ">=3.12"
+dependencies = [
+  # Phase 2 (scripts/generate_all.py) dependencies. `scripts/` is not its own
+  # installable uv workspace package (it's a set of standalone CLI scripts
+  # run via the venv's `python -m` directly, not imported by any service),
+  # so its third-party deps live here on the root workspace project instead
+  # of a `scripts/pyproject.toml` that would just add workspace-membership
+  # ceremony for no benefit. `devbrain-common` itself is deliberately NOT
+  # listed here — it's importable at this path only via the `sitecustomize.py`
+  # workaround documented in PROGRESS_REPORT.md Phase 1 (colon-in-path issue).
+  "faker>=30.0.0",
+  "sentence-transformers>=3.0.0",
+]
+
+[tool.uv.workspace]
+members = [
+  "packages/common",
+  "services/knowledge_mcp",
+  "services/project_mcp",
+  "services/task_mcp",
+  "services/github_mcp",
+  "services/calendar_mcp",
+  "backend",
+]
+
+[tool.uv.sources]
+devbrain-common = { workspace = true }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["packages", "services", "backend", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+namespace_packages = true
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

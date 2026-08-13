@@ -1,0 +1,182 @@
+# DevBrain local stack.
+#
+# Each phase that adds a service is responsible for adding its own service
+# stanza + Dockerfile in the same change (see ORCHESTRATION.md) — see the
+# `knowledge-mcp` stanza below (added Phase 3) as the reference pattern.
+# Note its `build.context` is `.` (repo root), not the service's own
+# directory — every service here is a uv workspace member and needs its
+# workspace siblings (at minimum `packages/common`) reachable during
+# `uv sync` at image-build time; `dockerfile:` points at the actual
+# Dockerfile inside the service directory.
+#
+# Do not pre-declare service stanzas for code that doesn't exist yet — an
+# agent adds its stanza in the same change that adds its Dockerfile, so
+# `docker compose up` always reflects what's actually buildable.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devbrain}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-locally}
+      POSTGRES_DB: ${POSTGRES_DB:-devbrain}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - devbrain_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devbrain}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  db_test:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: devbrain_test
+      POSTGRES_PASSWORD: devbrain_test
+      POSTGRES_DB: devbrain_test
+    ports:
+      - "55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devbrain_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles: ["test"]
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+  knowledge-mcp:
+    build:
+      # Context is the repo root, not this service's own directory — a uv
+      # workspace member needs its workspace siblings (packages/common)
+      # reachable during `uv sync`. See services/knowledge_mcp/Dockerfile's
+      # top comment.
+      context: .
+      dockerfile: services/knowledge_mcp/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-change-me-locally}@db:5432/${POSTGRES_DB:-devbrain}
+      KNOWLEDGE_MCP_TRANSPORT: streamable-http
+      KNOWLEDGE_MCP_HOST: 0.0.0.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8001:8001"]
+
+  project-mcp:
+    build:
+      # Same pattern as knowledge-mcp above: context is repo root, not this
+      # service's own directory.
+      context: .
+      dockerfile: services/project_mcp/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-change-me-locally}@db:5432/${POSTGRES_DB:-devbrain}
+      PROJECT_MCP_TRANSPORT: streamable-http
+      PROJECT_MCP_HOST: 0.0.0.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8002:8002"]
+
+  task-mcp:
+    build:
+      # Same pattern as knowledge-mcp/project-mcp above: context is repo
+      # root, not this service's own directory.
+      context: .
+      dockerfile: services/task_mcp/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-change-me-locally}@db:5432/${POSTGRES_DB:-devbrain}
+      TASK_MCP_TRANSPORT: streamable-http
+      TASK_MCP_HOST: 0.0.0.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8003:8003"]
+
+  github-mcp:
+    build:
+      # Same pattern as knowledge-mcp/project-mcp/task-mcp above: context is
+      # repo root, not this service's own directory.
+      context: .
+      dockerfile: services/github_mcp/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-change-me-locally}@db:5432/${POSTGRES_DB:-devbrain}
+      GITHUB_MCP_TRANSPORT: streamable-http
+      GITHUB_MCP_HOST: 0.0.0.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8004:8004"]
+
+  calendar-mcp:
+    build:
+      # Same pattern as knowledge-mcp/project-mcp/task-mcp/github-mcp above:
+      # context is repo root, not this service's own directory.
+      context: .
+      dockerfile: services/calendar_mcp/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-change-me-locally}@db:5432/${POSTGRES_DB:-devbrain}
+      CALENDAR_MCP_TRANSPORT: streamable-http
+      CALENDAR_MCP_HOST: 0.0.0.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8005:8005"]
+
+  backend:
+    build:
+      # Same pattern as the five `*-mcp` stanzas above: context is repo
+      # root, not this directory — see `backend/Dockerfile`'s top comment.
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-devbrain}:${POSTGRES_PASSWORD:-change-me-locally}@db:5432/${POSTGRES_DB:-devbrain}
+    depends_on:
+      db:
+        condition: service_healthy
+      # Deliberately *not* depending on the five `*-mcp` services being up:
+      # `devbrain_backend`'s agents/routers call straight into each
+      # service's `services/*.py` layer as an in-process Python import
+      # (Phase 7's design — see PROGRESS_REPORT.md), never over MCP
+      # transport, so this container never makes a network call to any of
+      # them. It only needs Postgres.
+    ports: ["8000:8000"]
+
+  frontend:
+    build:
+      # Unlike every stanza above, this one's context is `frontend/` itself,
+      # not the repo root — `frontend/Dockerfile`'s own top comment explains
+      # why (no uv workspace dependency to reach).
+      context: frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the client JS bundle at *build time* (Next.js
+        # `NEXT_PUBLIC_*` convention) — must be a URL the **browser on the
+        # host** can resolve, not compose-internal service DNS
+        # (`http://backend:8000` only resolves *inside* the compose
+        # network's containers, e.g. from this frontend container's own
+        # Node server-side code — the actual page fetches in this app run
+        # client-side, in the user's browser on the host, which can't see
+        # that DNS name). `http://localhost:8000` works because `backend`'s
+        # stanza above publishes 8000 to the host.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    ports: ["3000:3000"]
+
+volumes:
+  devbrain_pgdata:

@@ -1,0 +1,71 @@
+[project]
+name = "knowledge-mcp"
+version = "0.1.0"
+description = "DevBrain Knowledge MCP — notes, tags, links, hybrid search, meetings, decisions"
+requires-python = ">=3.12"
+dependencies = [
+  # Pinned <2.0 deliberately: mcp>=2.0 ships a redesigned high-level API
+  # (`mcp.server.mcpserver.MCPServer`) that dropped the classic
+  # `mcp.server.fastmcp.FastMCP` decorator API this service is built against
+  # (per second-brain-mcp-plan.md §1: "FastMCP (high-level, decorator-based)").
+  # Revisit the 2.0 migration in a later hardening phase.
+  "mcp>=1.9.0,<2.0.0",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "pgvector>=0.2.5",
+  "sentence-transformers>=3.0.0",
+  # Listed directly (sentence-transformers already pulls it in transitively)
+  # so `[tool.uv.sources]` below can target it — uv only honors a source
+  # override for a package that's a *direct* dependency of the project
+  # declaring the override.
+  "torch>=2.0.0",
+  "pydantic>=2.7.0",
+  # A real dependency (not just importable via the local
+  # `.venv/sitecustomize.py` workaround) — that workaround only patches
+  # *this dev machine's* colon-in-path venv at runtime; a Docker image has
+  # no colon in `/app/...` and needs `devbrain_common` genuinely installed.
+  # Resolves as a path-based workspace member via the root `pyproject.toml`
+  # `[tool.uv.sources]` entry (`devbrain-common = { workspace = true }`,
+  # already present from Phase 0/1).
+  "devbrain-common",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.7",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+]
+
+[project.scripts]
+knowledge-mcp = "knowledge_mcp.server:main"
+
+# `sentence-transformers` pulls in `torch`, whose default PyPI Linux wheel
+# bundles the full CUDA/GPU toolchain (~2GB+ of `nvidia-*` packages) — fine
+# on this dev machine (macOS has no CUDA wheel to begin with) but disastrous
+# for `Dockerfile`'s Linux build (multi-gigabyte image, very slow `uv sync`)
+# and for CI's Linux runner. Route `torch` through PyTorch's official
+# CPU-only wheel index on Linux specifically (embeddings run on CPU per
+# second-brain-mcp-plan.md §1 — "run locally", no GPU dependency needed
+# anywhere in this project). uv workspaces merge `[tool.uv.sources]`/
+# `[tool.uv.index]` declarations from every member into one resolution, so
+# this also shrinks `scripts/`'s `sentence-transformers` dependency (root
+# `pyproject.toml`) and any future service that pulls in `torch`, on Linux.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowledge_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

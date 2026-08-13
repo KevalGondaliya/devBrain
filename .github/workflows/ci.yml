@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-typecheck-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: devbrain_test
+          POSTGRES_PASSWORD: devbrain_test
+          POSTGRES_DB: devbrain_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U devbrain_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://devbrain_test:devbrain_test@localhost:5432/devbrain_test
+      DEVBRAIN_LLM_MODE: stub
+      # scripts/ isn't an installable workspace package (see pyproject.toml
+      # comment); mypy needs an explicit path to resolve devbrain_common
+      # imports from it. backend/ (Phase 7) imports every service's
+      # services/ layer directly (that's the whole point of an "agent"
+      # calling the same services a tool calls, not going through MCP) so
+      # every service's src/ needs to be on the path too, repo-wide.
+      MYPYPATH: packages/common/src:scripts:backend/src:services/knowledge_mcp/src:services/project_mcp/src:services/task_mcp/src:services/github_mcp/src:services/calendar_mcp/src
+      # Every phase's own local verification has always scoped mypy to
+      # source dirs only, never test dirs (see MYPY_SRC_PATHS below) — every
+      # service's tests/unit/_fakes.py-style helper is imported by its test
+      # file with a bare module name, resolved by pytest's rootdir insertion
+      # at collection time, not by mypy. Checking `.` (tests included) was
+      # never actually the verified surface; this makes CI check what every
+      # phase has actually been checking all along instead of failing on a
+      # false gap discovered in Phase 7.
+      MYPY_SRC_PATHS: >-
+        packages/common/src scripts backend/src
+        services/knowledge_mcp/src services/project_mcp/src
+        services/task_mcp/src services/github_mcp/src services/calendar_mcp/src
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # NOTE: plain `uv sync` silently drops packages/common's deps from the
+      # shared venv (see PROGRESS_REPORT.md Phase 2) — always use
+      # --all-packages here.
+      - name: Sync workspace
+        run: uv sync --all-packages --all-extras --dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type check (mypy)
+        run: uv run mypy $MYPY_SRC_PATHS
+
+      - name: Run migrations
+        run: uv run alembic upgrade head
+        working-directory: packages/common
+
+      - name: Unit + integration tests
+        run: uv run pytest tests packages services backend scripts -q --maxfail=1
+
+      - name: Dependency audit
+        run: uv run pip-audit || true
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # This job's checkout path (a clean GitHub Actions runner workspace)
+      # has no colon in it, so npm's PATH-join bug documented in
+      # PROGRESS_REPORT.md's Phase 9 section (which breaks `npm run
+      # build`/`npx next` on this repo's *local dev* checkout path only)
+      # does not apply here — `npm run build`/`npm run lint` work fine on
+      # CI as plain `npm run` invocations. Kept as plain `npm run` (not the
+      # `./node_modules/.bin/next ...` workaround) so this job exercises the
+      # normal, unpatched command a fresh contributor would actually run;
+      # `frontend/Dockerfile` still uses the direct-binary form since that's
+      # what's verified against the colon-path host (see its own comment).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [lint-typecheck-test, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images (whatever Dockerfiles exist)
+        run: |
+          set -e
+          for f in services/*/Dockerfile backend/Dockerfile frontend/Dockerfile; do
+            [ -f "$f" ] || continue
+            dir=$(dirname "$f")
+            echo "Building $dir"
+            docker build "$dir"
+          done

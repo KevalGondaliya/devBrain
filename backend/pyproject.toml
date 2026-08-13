@@ -1,0 +1,60 @@
+[project]
+name = "devbrain-backend"
+version = "0.1.0"
+description = "DevBrain backend: agent orchestrators (Phase 7) + FastAPI HTTP surface (Phase 8)"
+requires-python = ">=3.12"
+dependencies = [
+  # Real dependency (not just the local `.venv/sitecustomize.py` workaround)
+  # so a Docker image (no colon-in-path, no sitecustomize hack) installs it
+  # normally — same pattern as every services/*/pyproject.toml. Resolves via
+  # the root `pyproject.toml`'s `[tool.uv.sources]` workspace mapping.
+  "devbrain-common",
+  # Phase 7 agents/ call each service's `services/*.py` functions directly
+  # (no MCP transport hop — see ORCHESTRATION.md's tool/skill/agent
+  # distinction) and therefore depend on all five service packages as real
+  # importable libraries, not just at runtime via sitecustomize.
+  "knowledge-mcp",
+  "project-mcp",
+  "task-mcp",
+  "github-mcp",
+  "calendar-mcp",
+  "anthropic>=0.40.0",
+  # Phase 8: the FastAPI HTTP surface (`devbrain_backend.api`) over the
+  # Phase 7 agents/services above.
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.7",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+  # Phase 8: `fastapi.testclient.TestClient` is httpx-based (Starlette
+  # >=0.36) — needed to exercise `devbrain_backend.api.main.app` in tests.
+  "httpx>=0.27.0",
+]
+
+[tool.uv.sources]
+# Mirrors the root `pyproject.toml`'s `devbrain-common = { workspace = true }`
+# mapping — needed here too since `backend` is the first workspace member
+# that depends on *sibling* service packages (not just `devbrain-common`),
+# so each must be told to resolve from the local workspace, not PyPI.
+devbrain-common = { workspace = true }
+knowledge-mcp = { workspace = true }
+project-mcp = { workspace = true }
+task-mcp = { workspace = true }
+github-mcp = { workspace = true }
+calendar-mcp = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/devbrain_backend"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

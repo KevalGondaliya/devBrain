@@ -1,0 +1,42 @@
+[project]
+name = "devbrain-common"
+version = "0.1.0"
+description = "DevBrain shared package: config, DB/session, schema, logging, auth, audit, rate limiting"
+requires-python = ">=3.12"
+dependencies = [
+  "sqlalchemy[asyncio]>=2.0.30",
+  "asyncpg>=0.29.0",
+  "alembic>=1.13.2",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.3.0",
+  "structlog>=24.1.0",
+  "pgvector>=0.2.5",
+  # Phase 6: `devbrain_common.approval_tools` registers the shared
+  # request_approval/list_pending_approvals/decide_approval MCP tools.
+  # Pinned <2.0 for the same reason every service pins it — see
+  # services/knowledge_mcp/pyproject.toml's comment on the classic
+  # FastMCP decorator API vs. the mcp>=2.0 redesign.
+  "mcp>=1.9.0,<2.0.0",
+  # Phase 7: `devbrain_common.llm.RealAnthropicLLMClient` (DEVBRAIN_LLM_MODE=real
+  # only — the default `stub` mode never imports this at all).
+  "anthropic>=0.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.7",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/devbrain_common"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
